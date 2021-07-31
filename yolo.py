@@ -12,6 +12,27 @@ from nets.yolo4_tiny import yolo_body, yolo_eval
 from utils.utils import letterbox_image
 
 
+# hhhh
+# 防止显存爆炸，限制GPU使用
+import tensorflow as tf
+import cv2
+import math
+#import numpy as np
+import keras
+
+config = tf.compat.v1.ConfigProto(allow_soft_placement=True)
+
+config.gpu_options.per_process_gpu_memory_fraction = 0.7
+tf.compat.v1.keras.backend.set_session(tf.compat.v1.Session(config=config))
+
+
+# 求两点间距离
+def getDist_P2P(PointA, PointB):
+    distance = math.pow((PointA[0] - PointB[0]), 2) + math.pow((PointA[1] - PointB[1]), 2)
+    distance = math.sqrt(distance)
+    return distance
+##
+
 #--------------------------------------------#
 #   使用自己训练好的模型预测需要修改3个参数
 #   model_path、classes_path和phi都需要修改！
@@ -31,8 +52,8 @@ class YOLO(object):
         #   phi = 3为ECA
         #-------------------------------#
         "phi"               : 0,  
-        "score"             : 0.5,
-        "iou"               : 0.3,
+        "score"             : 0.2,
+        "iou"               : 0.2,
         "max_boxes"         : 100,  
         #-------------------------------#
         #   显存比较小可以使用416x416
@@ -143,8 +164,12 @@ class YOLO(object):
         #---------------------------------------------------------#
         #   在这里将图像转换成RGB图像，防止灰度图在预测时报错。
         #---------------------------------------------------------#
+
         image = image.convert('RGB')
 
+        #image = image[200:image.shape[0] - 100, 100:image.shape[1] - 100]
+        # image = image.convert('RGB')
+        # frame = image.convert('RGB')
         #---------------------------------------------------------#
         #   给图像增加灰条，实现不失真的resize
         #   也可以直接resize进行识别
@@ -180,45 +205,88 @@ class YOLO(object):
 
         thickness = max((image.size[0] + image.size[1]) // 300, 1)
 
+        #---------------------------------------------------------#
+        #   目标信息初始化
+        #---------------------------------------------------------#
+        target_x = int(image.size[0]/2) # init site
+        target_y = int(image.size[1]/2)
+        shoot_flag = 0
+        dist = 0
+        distlist = [] # 距离列表
+        targetlist = [] #目标列表
+        rangelist = [] # 目标框列表
+
+        #---------------------------------------------------------#
+        #   对检出目标进行条件筛选，获得最佳射击目标
+        #---------------------------------------------------------#
         for i, c in list(enumerate(out_classes)):
             predicted_class = self.class_names[c]
-            box = out_boxes[i]
-            score = out_scores[i]
+            if predicted_class == 'person': #'car'or predicted_class == 'truck':  # 可对检出的类单独操作
+                shoot_flag = 1 # 当识别到人会给1
+                box = out_boxes[i]
+                score = out_scores[i]
 
-            top, left, bottom, right = box
-            top = top - 5
-            left = left - 5
-            bottom = bottom + 5
-            right = right + 5
+                top, left, bottom, right = box
+                top = top - 5
+                left = left - 5
+                bottom = bottom + 5
+                right = right + 5
 
-            top = max(0, np.floor(top + 0.5).astype('int32'))
-            left = max(0, np.floor(left + 0.5).astype('int32'))
-            bottom = min(image.size[1], np.floor(bottom + 0.5).astype('int32'))
-            right = min(image.size[0], np.floor(right + 0.5).astype('int32'))
+                top = max(0, np.floor(top + 0.5).astype('int32'))
+                left = max(0, np.floor(left + 0.5).astype('int32'))
+                bottom = min(image.size[1], np.floor(bottom + 0.5).astype('int32'))
+                right = min(image.size[0], np.floor(right + 0.5).astype('int32'))
 
-            # 画框框
-            label = '{} {:.2f}'.format(predicted_class, score)
-            draw = ImageDraw.Draw(image)
-            label_size = draw.textsize(label, font)
-            label = label.encode('utf-8')
-            print(label, top, left, bottom, right)
-            
-            if top - label_size[1] >= 0:
-                text_origin = np.array([left, top - label_size[1]])
-            else:
-                text_origin = np.array([left, top + 1])
+                # 画框框
+                label = '{} {:.2f}'.format(predicted_class, score)
+                draw = ImageDraw.Draw(image)
+                label_size = draw.textsize(label, font)
+                label = label.encode('utf-8')
+                print(label, top, left, bottom, right)
+                rangewight = right - left # 框宽
+                rangeheight = bottom - top # 框高
 
-            for i in range(thickness):
+                if rangewight - rangeheight >= 0:  # 宽 - 高 >= 0  筛选不符合条件的(已经阵亡倒地的目标)
+                    continue
+
+                target_x = int(rangewight/2+left)
+                target_y = int(rangeheight/2+top - rangeheight*0.3)  # 锁头(头部占身体上半部分约20%)
+
+                # 最大开火距离(平面)
+                dist = int(rangewight/2) # bug 默认是以宽度最小为阈值
+                #print("X:",target_x,"Y:",target_y)
+
+                # 自适应显示
+                if top - label_size[1] >= 0:
+                    text_origin = np.array([left, top - label_size[1]])
+                else:
+                    text_origin = np.array([left, top + 1])
+
+                for i in range(thickness):
+                    draw.rectangle(
+                        [left + i, top + i, right - i, bottom - i],
+                        outline=self.colors[c])
+
                 draw.rectangle(
-                    [left + i, top + i, right - i, bottom - i],
-                    outline=self.colors[c])
-            draw.rectangle(
-                [tuple(text_origin), tuple(text_origin + label_size)],
-                fill=self.colors[c])
-            draw.text(text_origin, str(label,'UTF-8'), fill=(0, 0, 0), font=font)
-            del draw
+                    [tuple(text_origin), tuple(text_origin + label_size)],
+                    fill=self.colors[c])
+                draw.text(text_origin, str(label,'UTF-8'), fill=(0, 0, 0), font=font)
+                del draw
+                # bug 应当是给一个自适应的。但是image变量和前面有冲突，需要单独获取原图像中心点
+                img_w = 960#image.size[0]  # 获取图像尺寸的宽
+                img_h = 540#image.size[1]  # 获取图像尺寸的高
+                img_2w = int(img_w / 2)  # 获取图像尺寸半宽
+                img_2h = int(img_h / 2)  # 获取图像尺寸半高
+                distlist.append(getDist_P2P((img_2w, img_2h), (target_x, target_y))) #
+                targetlist.append([target_x,target_y])     # [x,y]
+                rangelist.append([right-left,bottom-top])  # [宽,高]
 
-        return image
+        # 获取当前帧平面距离最近的目标
+        if len(distlist) != 0:
+            MinDistIndex = distlist.index(min(distlist))
+            target_x, target_y = targetlist[MinDistIndex][0],targetlist[MinDistIndex][1]
+
+        return image, target_x, target_y, shoot_flag, dist
 
     def get_FPS(self, image, test_interval):
         if self.letterbox_image:
