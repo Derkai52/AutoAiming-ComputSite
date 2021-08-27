@@ -1,3 +1,6 @@
+## 本代码为 AutoAiming 处理端，AutoAiming 客户端详见 [AutoAiming-ClientSite](https://gitee.com/Derkai52/auto-aiming-client-site)
+
+
 ## YOLOV4-Tiny：You Only Look Once-Tiny目标检测模型在Keras当中的实现
 ---
 
